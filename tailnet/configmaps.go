@@ -14,9 +14,11 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
@@ -27,6 +29,12 @@ import (
 	"github.com/coder/coder/v2/tailnet/proto"
 	"github.com/coder/quartz"
 )
+
+var ServicePrefix = netip.PrefixFrom(
+	netip.AddrFrom16([16]byte{0xfd, 0x7a, 0x11, 0x5c, 0xa1, 0xe0}),
+	48,
+)
+var DNSRoute = netip.MustParsePrefix("100.100.100.0/24")
 
 const lostTimeout = 15 * time.Minute
 
@@ -313,8 +321,18 @@ func (c *configMaps) reconfig(nm *netmap.NetworkMap) {
 		return
 	}
 
-	rc := &router.Config{LocalAddrs: nm.Addresses}
-	err = c.engine.Reconfig(cfg, rc, &dns.Config{}, &tailcfg.Debug{})
+	addrs := append([]netip.Prefix{}, nm.Addresses...)
+	addrs = append(addrs, netip.MustParsePrefix("100.100.100.1/32"))
+	rc := &router.Config{
+		LocalAddrs: addrs,
+		Routes:     []netip.Prefix{ServicePrefix, DNSRoute},
+	}
+	err = c.engine.Reconfig(cfg, rc, &dns.Config{
+		Routes: map[dnsname.FQDN][]*dnstype.Resolver{
+			"coderlan.": nil,
+		},
+		OnlyIPv6: true,
+	}, &tailcfg.Debug{})
 	if err != nil {
 		if errors.Is(err, wgengine.ErrNoChanges) {
 			return

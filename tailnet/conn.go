@@ -14,6 +14,7 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
+	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/xerrors"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -22,6 +23,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/connstats"
+	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tsdial"
@@ -60,9 +62,6 @@ const (
 const EnvMagicsockDebugLogging = "CODER_MAGICSOCK_DEBUG_LOGGING"
 
 func init() {
-	// Globally disable network namespacing. All networking happens in
-	// userspace.
-	netns.SetEnabled(false)
 	// Tailscale, by default, "trims" the set of peers down to ones that we are
 	// "actively" communicating with in an effort to save memory. Since
 	// Tailscale removed keep-alives, it seems like open but idle connections
@@ -106,6 +105,9 @@ type Options struct {
 	ClientType proto.TelemetryEvent_ClientType
 	// TelemetrySink is optional.
 	TelemetrySink TelemetrySink
+	// TUNNetworking set to true means to use a TUN device and the OS net stack.
+	// False means userspace (gVisor) networking
+	TUNNetworking bool
 }
 
 // TelemetrySink allows tailnet.Conn to send network telemetry to the Coder
@@ -136,6 +138,8 @@ func NewConn(options *Options) (conn *Conn, err error) {
 		return nil, xerrors.New("At least one IP range must be provided")
 	}
 
+	netns.SetEnabled(options.TUNNetworking)
+
 	var telemetryStore *TelemetryStore
 	if options.TelemetrySink != nil {
 		var err error
@@ -159,6 +163,7 @@ func NewConn(options *Options) (conn *Conn, err error) {
 		nodeID = tailcfg.NodeID(uid)
 	}
 
+	sys := new(tsd.System)
 	wireguardMonitor, err := netmon.New(Logger(options.Logger.Named("net.wgmonitor")))
 	if err != nil {
 		return nil, xerrors.Errorf("create wireguard link monitor: %w", err)
@@ -168,16 +173,47 @@ func NewConn(options *Options) (conn *Conn, err error) {
 			wireguardMonitor.Close()
 		}
 	}()
+	sys.Set(wireguardMonitor)
 
 	dialer := &tsdial.Dialer{
 		Logf: Logger(options.Logger.Named("net.tsdial")),
 	}
-	sys := new(tsd.System)
+	sys.Set(dialer)
+
+	var (
+		tunDev     tun.Device
+		tunDevName string
+		dnsDev     dns.OSConfigurator
+		rr         router.Router
+	)
+	if options.TUNNetworking {
+		tunDev, tunDevName, err = tstun.New(Logger(options.Logger.Named("net.tun")), "utun8")
+		if err != nil {
+			return nil, xerrors.Errorf("create tun: %w", err)
+		}
+
+		rr, err = router.New(Logger(options.Logger.Named("net.router")), tunDev, sys.NetMon.Get())
+		if err != nil {
+			return nil, xerrors.Errorf("create router: %w", err)
+		}
+		sys.Set(rr)
+
+		dnsDev, err = dns.NewOSConfigurator(Logger(options.Logger.Named("net.dns")), tunDevName)
+		if err != nil {
+			tunDev.Close()
+			rr.Close()
+			return nil, xerrors.Errorf("create dns: %w", err)
+		}
+	}
+
 	wireguardEngine, err := wgengine.NewUserspaceEngine(Logger(options.Logger.Named("net.wgengine")), wgengine.Config{
 		NetMon:       wireguardMonitor,
 		Dialer:       dialer,
 		ListenPort:   options.ListenPort,
 		SetSubsystem: sys.Set,
+		Tun:          tunDev,
+		Router:       rr,
+		DNS:          dnsDev,
 	})
 	if err != nil {
 		return nil, xerrors.Errorf("create wgengine: %w", err)
@@ -188,11 +224,14 @@ func NewConn(options *Options) (conn *Conn, err error) {
 		}
 	}()
 	wireguardEngine.InstallCaptureHook(options.CaptureHook)
-	dialer.UseNetstackForIP = func(ip netip.Addr) bool {
-		_, ok := wireguardEngine.PeerForIP(ip)
-		return ok
+	if !options.TUNNetworking {
+		dialer.UseNetstackForIP = func(ip netip.Addr) bool {
+			_, ok := wireguardEngine.PeerForIP(ip)
+			return ok
+		}
 	}
 
+	wireguardEngine = wgengine.NewWatchdog(wireguardEngine)
 	sys.Set(wireguardEngine)
 
 	magicConn := sys.MagicSock.Get()
@@ -235,11 +274,12 @@ func NewConn(options *Options) (conn *Conn, err error) {
 		return nil, xerrors.Errorf("create netstack: %w", err)
 	}
 
-	dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
-		return netStack.DialContextTCP(ctx, dst)
+	if !options.TUNNetworking {
+		dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
+			return netStack.DialContextTCP(ctx, dst)
+		}
+		netStack.ProcessLocalIPs = true
 	}
-	netStack.ProcessLocalIPs = true
-	wireguardEngine = wgengine.NewWatchdog(wireguardEngine)
 
 	cfgMaps := newConfigMaps(
 		options.Logger,

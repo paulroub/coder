@@ -123,6 +123,7 @@ func (r *RootCmd) CoreSubcommands() []*serpent.Command {
 		// Hidden
 		r.expCmd(),
 		r.gitssh(),
+		r.lan(),
 		r.support(),
 		r.vscodeSSH(),
 		r.workspaceAgent(),
