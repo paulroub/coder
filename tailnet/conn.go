@@ -105,9 +105,9 @@ type Options struct {
 	ClientType proto.TelemetryEvent_ClientType
 	// TelemetrySink is optional.
 	TelemetrySink TelemetrySink
-	// TUNNetworking set to true means to use a TUN device and the OS net stack.
-	// False means userspace (gVisor) networking
-	TUNNetworking bool
+	// TUNDev tun.Device to use for networking. Set to nil means to use gVisor
+	// (userspace) netstack
+	TUNDev tun.Device
 }
 
 // TelemetrySink allows tailnet.Conn to send network telemetry to the Coder
@@ -138,7 +138,7 @@ func NewConn(options *Options) (conn *Conn, err error) {
 		return nil, xerrors.New("At least one IP range must be provided")
 	}
 
-	netns.SetEnabled(options.TUNNetworking)
+	netns.SetEnabled(options.TUNDev != nil)
 
 	var telemetryStore *TelemetryStore
 	if options.TelemetrySink != nil {
@@ -181,26 +181,23 @@ func NewConn(options *Options) (conn *Conn, err error) {
 	sys.Set(dialer)
 
 	var (
-		tunDev     tun.Device
-		tunDevName string
-		dnsDev     dns.OSConfigurator
-		rr         router.Router
+		dnsDev dns.OSConfigurator
+		rr     router.Router
 	)
-	if options.TUNNetworking {
-		tunDev, tunDevName, err = tstun.New(Logger(options.Logger.Named("net.tun")), "utun8")
-		if err != nil {
-			return nil, xerrors.Errorf("create tun: %w", err)
-		}
-
-		rr, err = router.New(Logger(options.Logger.Named("net.router")), tunDev, sys.NetMon.Get())
+	if options.TUNDev != nil {
+		rr, err = router.New(Logger(options.Logger.Named("net.router")), options.TUNDev, sys.NetMon.Get())
 		if err != nil {
 			return nil, xerrors.Errorf("create router: %w", err)
 		}
 		sys.Set(rr)
 
-		dnsDev, err = dns.NewOSConfigurator(Logger(options.Logger.Named("net.dns")), tunDevName)
+		name, err := options.TUNDev.Name()
 		if err != nil {
-			tunDev.Close()
+			rr.Close()
+			return nil, xerrors.Errorf("get tun device name: %w", err)
+		}
+		dnsDev, err = dns.NewOSConfigurator(Logger(options.Logger.Named("net.dns")), name)
+		if err != nil {
 			rr.Close()
 			return nil, xerrors.Errorf("create dns: %w", err)
 		}
@@ -211,7 +208,7 @@ func NewConn(options *Options) (conn *Conn, err error) {
 		Dialer:       dialer,
 		ListenPort:   options.ListenPort,
 		SetSubsystem: sys.Set,
-		Tun:          tunDev,
+		Tun:          options.TUNDev,
 		Router:       rr,
 		DNS:          dnsDev,
 	})
@@ -224,7 +221,7 @@ func NewConn(options *Options) (conn *Conn, err error) {
 		}
 	}()
 	wireguardEngine.InstallCaptureHook(options.CaptureHook)
-	if !options.TUNNetworking {
+	if options.TUNDev == nil {
 		dialer.UseNetstackForIP = func(ip netip.Addr) bool {
 			_, ok := wireguardEngine.PeerForIP(ip)
 			return ok
@@ -274,7 +271,7 @@ func NewConn(options *Options) (conn *Conn, err error) {
 		return nil, xerrors.Errorf("create netstack: %w", err)
 	}
 
-	if !options.TUNNetworking {
+	if options.TUNDev == nil {
 		dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
 			return netStack.DialContextTCP(ctx, dst)
 		}

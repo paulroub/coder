@@ -210,6 +210,7 @@ require (
 	dario.cat/mergo v1.0.0 // indirect
 	github.com/DataDog/go-libddwaf/v3 v3.2.1 // indirect
 	github.com/alecthomas/chroma/v2 v2.14.0 // indirect
+	github.com/aletheia7/ul v1.5.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.11.2 // indirect
 	github.com/charmbracelet/x/ansi v0.1.4 // indirect
 	github.com/distribution/reference v0.6.0 // indirect

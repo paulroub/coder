@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/xerrors"
 	"nhooyr.io/websocket"
 	"tailscale.com/tailcfg"
@@ -185,9 +186,9 @@ type DialAgentOptions struct {
 	// Whether the client will send network telemetry events.
 	// Enable instead of Disable so it's initialized to false (in tests).
 	EnableTelemetry bool
-	// TUNNetworking set to true means to use a TUN device and the OS net stack.
-	// False means userspace (gVisor) networking
-	TUNNetworking bool
+	// TUNDev tun.Device to use for networking. Set to nil means to use gVisor
+	// (userspace) netstack
+	TUNDev tun.Device
 }
 
 func (c *Client) DialAgent(dialCtx context.Context, agentID uuid.UUID, options *DialAgentOptions) (agentConn *AgentConn, err error) {
@@ -262,7 +263,7 @@ func (c *Client) DialAgent(dialCtx context.Context, agentID uuid.UUID, options *
 		CaptureHook:         options.CaptureHook,
 		ClientType:          proto.TelemetryEvent_CLI,
 		TelemetrySink:       telemetrySink,
-		TUNNetworking:       options.TUNNetworking,
+		TUNDev:              options.TUNDev,
 	})
 	if err != nil {
 		return nil, xerrors.Errorf("create tailnet: %w", err)

@@ -11,6 +11,9 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/aletheia7/ul"
+	"github.com/tailscale/wireguard-go/tun"
+	"golang.org/x/sys/unix"
 	"golang.org/x/xerrors"
 
 	"cdr.dev/slog"
@@ -24,7 +27,8 @@ import (
 
 func (r *RootCmd) lan() *serpent.Command {
 	var (
-		disableAutostart bool
+		disableAutostart  bool
+		tunFileDescriptor int64
 	)
 	client := new(codersdk.Client)
 	cmd := &serpent.Command{
@@ -36,9 +40,18 @@ func (r *RootCmd) lan() *serpent.Command {
 			r.InitClient(client),
 		),
 		Hidden: true,
-		Handler: func(inv *serpent.Invocation) error {
+		Handler: func(inv *serpent.Invocation) (retErr error) {
 			ctx, cancel := context.WithCancel(inv.Context())
 			defer cancel()
+
+			macLog := ul.New_object("com.coder.Coder.CoderPacketTunnelProvider", "golang")
+			defer macLog.Release()
+			macLog.Info("test log")
+			defer func() {
+				if retErr != nil {
+					macLog.Errorf("coder lan error: %s", retErr.Error())
+				}
+			}()
 
 			workspace, workspaceAgent, err := getWorkspaceAndAgent(ctx, inv, client, !disableAutostart, inv.Args[0])
 			if err != nil {
@@ -71,14 +84,17 @@ func (r *RootCmd) lan() *serpent.Command {
 				return xerrors.Errorf("await agent: %w", err)
 			}
 
+			tunDev, err := makeTUN(int(tunFileDescriptor))
+			if err != nil {
+				macLog.Errorf("make TUN failed: %s", err.Error())
+				return xerrors.Errorf("make TUN: %w", err)
+			}
 			opts := &workspacesdk.DialAgentOptions{
-				TUNNetworking: true,
+				TUNDev: tunDev,
 			}
 
 			logger := inv.Logger
-			if r.verbose {
-				opts.Logger = logger.AppendSinks(sloghuman.Sink(inv.Stdout)).Leveled(slog.LevelDebug)
-			}
+			opts.Logger = logger.AppendSinks(sloghuman.Sink(macLog)).Leveled(slog.LevelDebug)
 
 			if r.disableDirect {
 				_, _ = fmt.Fprintln(inv.Stderr, "Direct connections disabled.")
@@ -132,6 +148,12 @@ func (r *RootCmd) lan() *serpent.Command {
 
 	cmd.Options = serpent.OptionSet{
 		sshDisableAutostartOption(serpent.BoolOf(&disableAutostart)),
+		serpent.Option{
+			Flag:          "tunFileDescriptor",
+			FlagShorthand: "t",
+			Description:   "File descriptor of the TUN device",
+			Value:         serpent.Int64Of(&tunFileDescriptor),
+		},
 	}
 
 	return cmd
@@ -179,4 +201,23 @@ func writeHosts(hosts []hostEntry) error {
 		return xerrors.Errorf("write hosts: %w", err)
 	}
 	return nil
+}
+
+func makeTUN(tunFd int) (tun.Device, error) {
+	dupTunFd, err := unix.Dup(tunFd)
+	if err != nil {
+		return nil, xerrors.Errorf("dup tun fd: %w", err)
+	}
+
+	err = unix.SetNonblock(dupTunFd, true)
+	if err != nil {
+		unix.Close(dupTunFd)
+		return nil, xerrors.Errorf("set nonblock: %w", err)
+	}
+	tun, err := tun.CreateTUNFromFile(os.NewFile(uintptr(dupTunFd), "/dev/tun"), 0)
+	if err != nil {
+		unix.Close(dupTunFd)
+		return nil, xerrors.Errorf("create TUN from File: %w", err)
+	}
+	return tun, nil
 }
