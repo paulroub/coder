@@ -11,7 +11,6 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/aletheia7/ul"
 	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/sys/unix"
 	"golang.org/x/xerrors"
@@ -43,15 +42,6 @@ func (r *RootCmd) lan() *serpent.Command {
 		Handler: func(inv *serpent.Invocation) (retErr error) {
 			ctx, cancel := context.WithCancel(inv.Context())
 			defer cancel()
-
-			macLog := ul.New_object("com.coder.Coder.CoderPacketTunnelProvider", "golang")
-			defer macLog.Release()
-			macLog.Info("test log")
-			defer func() {
-				if retErr != nil {
-					macLog.Errorf("coder lan error: %s", retErr.Error())
-				}
-			}()
 
 			workspace, workspaceAgent, err := getWorkspaceAndAgent(ctx, inv, client, !disableAutostart, inv.Args[0])
 			if err != nil {
@@ -86,7 +76,6 @@ func (r *RootCmd) lan() *serpent.Command {
 
 			tunDev, err := makeTUN(int(tunFileDescriptor))
 			if err != nil {
-				macLog.Errorf("make TUN failed: %s", err.Error())
 				return xerrors.Errorf("make TUN: %w", err)
 			}
 			opts := &workspacesdk.DialAgentOptions{
@@ -94,7 +83,7 @@ func (r *RootCmd) lan() *serpent.Command {
 			}
 
 			logger := inv.Logger
-			opts.Logger = logger.AppendSinks(sloghuman.Sink(macLog)).Leveled(slog.LevelDebug)
+			opts.Logger = logger.AppendSinks(sloghuman.Sink(inv.Stderr)).Leveled(slog.LevelDebug)
 
 			if r.disableDirect {
 				_, _ = fmt.Fprintln(inv.Stderr, "Direct connections disabled.")
@@ -151,7 +140,7 @@ func (r *RootCmd) lan() *serpent.Command {
 		serpent.Option{
 			Flag:          "tunFileDescriptor",
 			FlagShorthand: "t",
-			Description:   "File descriptor of the TUN device",
+			Description:   "File descriptor of the TUN device.",
 			Value:         serpent.Int64Of(&tunFileDescriptor),
 		},
 	}
