@@ -41,14 +41,14 @@ func (c ClientCoordinateeAuth) Authorize(req *proto.CoordinateRequest) error {
 
 	if upd := req.GetUpdateSelf(); upd != nil {
 		for _, addrStr := range upd.Node.Addresses {
-			pre, err := netip.ParsePrefix(addrStr)
+			_, err := netip.ParsePrefix(addrStr)
 			if err != nil {
 				return xerrors.Errorf("parse node address: %w", err)
 			}
 
-			if pre.Bits() != 128 {
-				return xerrors.Errorf("invalid address bits, expected 128, got %d", pre.Bits())
-			}
+			//if pre.Bits() != 128 {
+			//	return xerrors.Errorf("invalid address bits, expected 128, got %d", pre.Bits())
+			//}
 		}
 	}
 

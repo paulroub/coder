@@ -123,6 +123,7 @@ func (c *connIO) recvLoop() {
 				return
 			}
 			if err := c.handleRequest(req); err != nil {
+				c.logger.Debug(c.peerCtx, "exiting io recvLoop; failed to handle request", slog.Error(err))
 				return
 			}
 		}

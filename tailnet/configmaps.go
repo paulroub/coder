@@ -322,14 +322,16 @@ func (c *configMaps) reconfig(nm *netmap.NetworkMap) {
 	}
 
 	addrs := append([]netip.Prefix{}, nm.Addresses...)
-	addrs = append(addrs, netip.MustParsePrefix("100.100.100.1/32"))
 	rc := &router.Config{
 		LocalAddrs: addrs,
-		Routes:     []netip.Prefix{ServicePrefix, DNSRoute},
+		Routes:     []netip.Prefix{ServicePrefix},
 	}
 	err = c.engine.Reconfig(cfg, rc, &dns.Config{
 		Routes: map[dnsname.FQDN][]*dnstype.Resolver{
 			"coderlan.": nil,
+		},
+		Hosts: map[dnsname.FQDN][]netip.Addr{
+			"dogfood2.coderlan.": {netip.MustParseAddr("fd7a:115c:a1e0:4280:a0ad:1919:6552:9fe3")},
 		},
 		OnlyIPv6: true,
 	}, &tailcfg.Debug{})
@@ -417,7 +419,10 @@ func (c *configMaps) updatePeerLocked(update *proto.CoordinateResponse_PeerUpdat
 			logger.Critical(context.Background(), "failed to convert proto node to tailcfg", slog.F("node_proto", update.Node))
 			return false
 		}
-		logger = logger.With(slog.F("key_id", node.Key.ShortString()), slog.F("node", node))
+		logger = logger.With(
+			slog.F("key_id", node.Key.ShortString()),
+			//slog.F("node", node),
+		)
 		node.KeepAlive = c.nodeKeepalive(lc, status, node)
 	}
 	switch {

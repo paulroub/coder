@@ -244,7 +244,7 @@ func (c *Client) DialAgent(dialCtx context.Context, agentID uuid.UUID, options *
 			CompressionMode: websocket.CompressionDisabled,
 		})
 
-	ip := tailnet.IP()
+	//ip := netip.MustParseAddr("fd7a:115c:a1e0::1")
 	var header http.Header
 	if headerTransport, ok := c.client.HTTPClient.Transport.(*codersdk.HeaderTransport); ok {
 		header = headerTransport.Header
@@ -254,7 +254,7 @@ func (c *Client) DialAgent(dialCtx context.Context, agentID uuid.UUID, options *
 		telemetrySink = connector
 	}
 	conn, err := tailnet.NewConn(&tailnet.Options{
-		Addresses:           []netip.Prefix{netip.PrefixFrom(ip, 128)},
+		Addresses:           []netip.Prefix{netip.MustParsePrefix("fd7a:115c:a1e0::2/128")},
 		DERPMap:             connInfo.DERPMap,
 		DERPHeader:          &header,
 		DERPForceWebSockets: connInfo.DERPForceWebSockets,
@@ -297,10 +297,10 @@ func (c *Client) DialAgent(dialCtx context.Context, agentID uuid.UUID, options *
 		},
 	})
 
-	if !agentConn.AwaitReachable(dialCtx) {
-		_ = agentConn.Close()
-		return nil, xerrors.Errorf("timed out waiting for agent to become reachable: %w", dialCtx.Err())
-	}
+	//if !agentConn.AwaitReachable(dialCtx) {
+	//	_ = agentConn.Close()
+	//	return nil, xerrors.Errorf("timed out waiting for agent to become reachable: %w", dialCtx.Err())
+	//}
 
 	return agentConn, nil
 }
